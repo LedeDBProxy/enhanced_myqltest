@@ -4739,7 +4739,7 @@ void do_get_file_name(struct st_command *command,
 }
 
 
-void do_set_charset(struct st_command *command)
+void do_set_charset(MYSQL* mysql, struct st_command *command)
 {
   char *charset_name= command->first_argument;
   char *p;
@@ -4756,6 +4756,9 @@ void do_set_charset(struct st_command *command)
   charset_info= get_charset_by_csname(charset_name,MY_CS_PRIMARY,MYF(MY_WME));
   if (!charset_info)
     abort_not_supported_test("Test requires charset '%s'", charset_name);
+  else
+    mysql_set_character_set(mysql, charset_info->csname);
+
 }
 
 
@@ -9149,7 +9152,7 @@ int main(int argc, char **argv)
 	timer_output();
 	break;
       case Q_CHARACTER_SET:
-	do_set_charset(command);
+	do_set_charset(&cur_con->mysql, command);
 	break;
       case Q_DISABLE_PS_PROTOCOL:
         set_property(command, P_PS, 0);
