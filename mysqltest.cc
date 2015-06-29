@@ -381,7 +381,7 @@ enum enum_commands {
   Q_QUERY_VERTICAL, Q_QUERY_HORIZONTAL, Q_SORTED_RESULT,
   Q_LOWERCASE,
   Q_START_TIMER, Q_END_TIMER,
-  Q_CHARACTER_SET, Q_DISABLE_PS_PROTOCOL, Q_ENABLE_PS_PROTOCOL,
+  Q_CHARACTER_SET, Q_DISABLE_PS_PROTOCOL, Q_TEMP_DISABLE_PS_PROTOCOL, Q_ENABLE_PS_PROTOCOL,
   Q_DISABLE_RECONNECT, Q_ENABLE_RECONNECT,
   Q_IF,
   Q_DISABLE_PARSING, Q_ENABLE_PARSING,
@@ -460,6 +460,7 @@ const char *command_names[]=
   "end_timer",
   "character_set",
   "disable_ps_protocol",
+  "temp_disable_ps_protocol",
   "enable_ps_protocol",
   "disable_reconnect",
   "enable_reconnect",
@@ -9154,6 +9155,9 @@ int main(int argc, char **argv)
       case Q_CHARACTER_SET:
 	do_set_charset(&cur_con->mysql, command);
 	break;
+      case Q_TEMP_DISABLE_PS_PROTOCOL:
+        set_property(command, P_PS, 0);
+        break;
       case Q_DISABLE_PS_PROTOCOL:
         set_property(command, P_PS, 0);
         /* Close any open statements */
