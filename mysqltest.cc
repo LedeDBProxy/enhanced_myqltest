@@ -1506,8 +1506,8 @@ void die(const char *fmt, ...)
     Help debugging by displaying any warnings that might have
     been produced prior to the error
   */
-  if (cur_con && !cur_con->pending)
-    show_warnings_before_error(&cur_con->mysql);
+  /*if (cur_con && !cur_con->pending)
+    show_warnings_before_error(&cur_con->mysql);*/
 
   cleanup_and_exit(1);
 }
