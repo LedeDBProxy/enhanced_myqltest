@@ -1,0 +1,209 @@
+--- mysql-5.1.73/client/mysqltest.cc.orig	2013-11-05 02:52:27.000000000 +0800
++++ mysql-5.1.73/client/mysqltest.cc	2015-07-09 14:07:51.000000000 +0800
+@@ -227,6 +227,32 @@
+ 
+ HASH var_hash;
+ 
++#define MAX_STMT_ENTRY 256
++#define MAX_QUERY_LEN 256
++
++typedef struct stmt_entry
++{
++    MYSQL_STMT* stmt;
++    char query[MAX_QUERY_LEN];
++} stmt_entry;
++
++
++static MYSQL_STMT *find_stmt(stmt_entry *all, char *query)
++{
++    int i;
++    for (i = 0; i < MAX_STMT_ENTRY; i++) {
++        if (all[i].query != NULL) {
++            if (strcmp(all[i].query, query) == 0) {
++                return all[i].stmt;
++            }
++        } else {
++            break;
++        }
++    }
++
++    return NULL;
++}
++
+ struct st_connection
+ {
+   MYSQL mysql;
+@@ -235,6 +261,9 @@
+   char *name;
+   size_t name_len;
+   MYSQL_STMT* stmt;
++  stmt_entry all_stmts[MAX_STMT_ENTRY];
++  int num_stmt;
++
+   /* Set after send to disallow other queries before reap */
+   my_bool pending;
+ 
+@@ -287,7 +316,7 @@
+   Q_QUERY_VERTICAL, Q_QUERY_HORIZONTAL, Q_SORTED_RESULT,
+   Q_LOWERCASE,
+   Q_START_TIMER, Q_END_TIMER,
+-  Q_CHARACTER_SET, Q_DISABLE_PS_PROTOCOL, Q_ENABLE_PS_PROTOCOL,
++  Q_CHARACTER_SET, Q_DISABLE_PS_PROTOCOL, Q_TEMP_DISABLE_PS_PROTOCOL, Q_ENABLE_PS_PROTOCOL,
+   Q_DISABLE_RECONNECT, Q_ENABLE_RECONNECT,
+   Q_IF,
+   Q_DISABLE_PARSING, Q_ENABLE_PARSING,
+@@ -367,6 +396,7 @@
+   "end_timer",
+   "character_set",
+   "disable_ps_protocol",
++  "temp_disable_ps_protocol",
+   "enable_ps_protocol",
+   "disable_reconnect",
+   "enable_reconnect",
+@@ -1122,7 +1152,8 @@
+   for (--next_con; next_con >= connections; --next_con)
+   {
+     if (next_con->stmt)
+-      mysql_stmt_close(next_con->stmt);
++        mysql_stmt_close(next_con->stmt);
++
+     next_con->stmt= 0;
+     mysql_close(&next_con->mysql);
+     if (next_con->util_mysql)
+@@ -1136,13 +1167,22 @@
+ 
+ void close_statements()
+ {
++  int i;
+   struct st_connection *con;
+   DBUG_ENTER("close_statements");
+   for (con= connections; con < next_con; con++)
+   {
+-    if (con->stmt)
+-      mysql_stmt_close(con->stmt);
+-    con->stmt= 0;
++      for (i = 0; i < con->num_stmt; i++) {
++          if (con->all_stmts[i].stmt != NULL && (con->all_stmts[i].stmt)->stmt_id > 0) {
++              mysql_stmt_close(con->all_stmts[i].stmt);
++              con->all_stmts[i].stmt= NULL;
++          } else {
++              break;
++          }
++      }
++      con->num_stmt= 0;
++
++      con->stmt= 0;
+   }
+   DBUG_VOID_RETURN;
+ }
+@@ -1290,8 +1330,8 @@
+     Help debugging by displaying any warnings that might have
+     been produced prior to the error
+   */
+-  if (cur_con && !cur_con->pending)
+-    show_warnings_before_error(&cur_con->mysql);
++  /*if (cur_con && !cur_con->pending)
++    show_warnings_before_error(&cur_con->mysql);*/
+ 
+   cleanup_and_exit(1);
+ }
+@@ -4390,7 +4430,7 @@
+ }
+ 
+ 
+-void do_set_charset(struct st_command *command)
++void do_set_charset(MYSQL* mysql, struct st_command *command)
+ {
+   char *charset_name= command->first_argument;
+   char *p;
+@@ -4407,6 +4447,9 @@
+   charset_info= get_charset_by_csname(charset_name,MY_CS_PRIMARY,MYF(MY_WME));
+   if (!charset_info)
+     abort_not_supported_test("Test requires charset '%s'", charset_name);
++  else
++    mysql_set_character_set(mysql, charset_info->csname);
++
+ }
+ 
+ 
+@@ -4876,6 +4919,7 @@
+ {
+   DBUG_ENTER("close_connection");
+ 
++  int i;
+   struct st_connection *con;
+   static DYNAMIC_STRING ds_connection;
+   const struct command_arg close_connection_args[] = {
+@@ -4910,8 +4954,16 @@
+   */
+   wait_query_thread_end(con);
+ #endif /*EMBEDDED_LIBRARY*/
+-  if (con->stmt)
+-    mysql_stmt_close(con->stmt);
++  for (i = 0; i < con->num_stmt; i++) {
++      if (con->all_stmts[i].stmt != NULL && (con->all_stmts[i].stmt)->stmt_id > 0) {
++          mysql_stmt_close(con->all_stmts[i].stmt);
++          con->all_stmts[i].stmt= NULL;
++      } else {
++          break;
++      }
++  }
++  con->num_stmt= 0;
++
+   con->stmt= 0;
+ 
+   mysql_close(&con->mysql);
+@@ -7150,6 +7202,7 @@
+   DBUG_ENTER("run_query_stmt");
+   DBUG_PRINT("query", ("'%-.60s'", query));
+ 
++  cur_con->stmt = find_stmt(cur_con->all_stmts, query);
+   /*
+     Init a new stmt if it's not already one created for this connection
+   */
+@@ -7157,7 +7210,12 @@
+   {
+     if (!(stmt= mysql_stmt_init(mysql)))
+       die("unable to init stmt structure");
++    if (cur_con->num_stmt >= MAX_STMT_ENTRY) {
++      die("too many prepared stmts");
++    }
+     cur_con->stmt= stmt;
++    cur_con->all_stmts[cur_con->num_stmt].stmt= stmt;
++    strncpy(cur_con->all_stmts[cur_con->num_stmt++].query, query, MAX_QUERY_LEN);
+   }
+ 
+   /* Init dynamic strings for warnings */
+@@ -7170,11 +7228,14 @@
+   /*
+     Prepare the query
+   */
+-  if (mysql_stmt_prepare(stmt, query, query_len))
+-  {
+-    handle_error(command,  mysql_stmt_errno(stmt),
+-                 mysql_stmt_error(stmt), mysql_stmt_sqlstate(stmt), ds);
+-    goto end;
++  if (stmt->stmt_id > 0) {
++  } else {
++      if (mysql_stmt_prepare(stmt, query, query_len))
++      {
++          handle_error(command,  mysql_stmt_errno(stmt),
++                  mysql_stmt_error(stmt), mysql_stmt_sqlstate(stmt), ds);
++          goto end;
++      }
+   }
+ 
+   /*
+@@ -8413,8 +8474,11 @@
+ 	timer_output();
+ 	break;
+       case Q_CHARACTER_SET:
+-	do_set_charset(command);
++	do_set_charset(&cur_con->mysql, command);
+ 	break;
++      case Q_TEMP_DISABLE_PS_PROTOCOL:
++        ps_protocol_enabled= 0;
++        break;
+       case Q_DISABLE_PS_PROTOCOL:
+         ps_protocol_enabled= 0;
+         /* Close any open statements */
